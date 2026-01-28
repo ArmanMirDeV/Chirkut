@@ -68,9 +68,7 @@ exports.getUserById = async (req, res) => {
   }
 };
 
-// @desc    Update user
-// @route   PUT /api/users/:id
-// @access  Private (Admin only)
+// @desc    Update user (Admin only)
 exports.updateUser = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -106,43 +104,59 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// @desc    Deactivate user
-// @route   DELETE /api/users/:id
-// @access  Private (Admin only)
-exports.deactivateUser = async (req, res) => {
+// @desc    Apply to be manager
+// @route   POST /api/users/apply-manager
+// @access  Private
+exports.applyForManager = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+    const user = await User.findById(req.user.id);
+    if (user.role === 'manager' || user.role === 'admin') {
+      return res.status(400).json({ success: false, message: 'Already a manager/admin' });
     }
-
-    // Don't allow deactivating yourself
-    if (user._id.toString() === req.user.id) {
-      return res.status(400).json({
-        success: false,
-        message: 'You cannot deactivate your own account',
-      });
-    }
-
-    user.isActive = false;
-    user.leftDate = new Date();
+    user.managerStatus = 'applied';
     await user.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'User deactivated successfully',
-    });
+    res.status(200).json({ success: true, message: 'Application sent' });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Update manager status (Approve/Reject)
+// @route   PUT /api/users/:id/manager-status
+// @access  Private (Admin only)
+exports.updateManagerStatus = async (req, res) => {
+  try {
+    const { status } = req.body; // approved, rejected
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    user.managerStatus = status;
+    if (status === 'approved') {
+      user.role = 'manager';
+    }
+    await user.save();
+    res.status(200).json({ success: true, message: `Status updated to ${status}` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Hard Delete user (Admin only)
+// @route   DELETE /api/users/:id
+// @access  Private (Admin only)
+exports.deleteUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (user.role === 'admin') return res.status(400).json({ success: false, message: 'Cannot delete admin' });
+    
+    await user.deleteOne();
+    res.status(200).json({ success: true, message: 'User deleted permanently' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 
 // @desc    Update own profile
 // @route   PUT /api/users/profile/me
@@ -171,3 +185,4 @@ exports.updateProfile = async (req, res) => {
     });
   }
 };
+

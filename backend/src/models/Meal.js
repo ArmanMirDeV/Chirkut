@@ -20,11 +20,17 @@ const mealSchema = new mongoose.Schema(
       enum: ['breakfast', 'lunch', 'dinner'],
       required: [true, 'Please specify meal type'],
     },
+    mealValue: {
+      type: Number,
+      required: true,
+      default: 1, // breakfast will be 0.5, others 1
+    },
     guestCount: {
       type: Number,
       default: 0,
       min: 0,
     },
+
     month: {
       type: String,
       required: true,

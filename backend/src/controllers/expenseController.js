@@ -4,17 +4,21 @@ const { getMonthString } = require('../utils/helpers');
 // @desc    Add expense
 // @route   POST /api/expenses
 // @access  Private (Admin only)
+// @desc    Add Bazar entry (Expense)
+// @route   POST /api/expenses
+// @access  Private (Manager only)
 exports.addExpense = async (req, res) => {
   try {
-    const { category, amount, date, description, receiptImage } = req.body;
+    const { items, cost, category = 'grocery' } = req.body;
 
-    if (!category || !amount || !date || !description) {
+    if (!items || !cost) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide category, amount, date, and description',
+        message: 'Please provide items and cost',
       });
     }
 
+    const date = new Date(); // Automatic date/time
     const month = getMonthString(date);
 
     // Check if month is locked
@@ -22,23 +26,22 @@ exports.addExpense = async (req, res) => {
     if (lockedExpense) {
       return res.status(403).json({
         success: false,
-        message: 'Cannot add expenses for a locked month',
+        message: 'Cannot add bazar entries for a locked month',
       });
     }
 
     const expense = await Expense.create({
       category,
-      amount,
+      amount: cost,
       date,
       month,
-      description,
-      receiptImage: receiptImage || '',
+      description: items,
       addedBy: req.user.id,
     });
 
     res.status(201).json({
       success: true,
-      message: 'Expense added successfully',
+      message: 'Bazar entry added successfully',
       data: { expense },
     });
   } catch (error) {
@@ -48,6 +51,7 @@ exports.addExpense = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Get all expenses
 // @route   GET /api/expenses

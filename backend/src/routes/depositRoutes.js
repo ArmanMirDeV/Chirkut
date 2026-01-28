@@ -7,17 +7,27 @@ const {
   updateDeposit,
   deleteDeposit,
   getDepositSummary,
+  requestDeposit,
+  approveDeposit,
 } = require('../controllers/depositController');
-const { protect, adminOnly } = require('../middleware/auth');
+
+const { protect, adminOnly, managerOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
-router.post('/', protect, adminOnly, addDeposit);
+router.post('/', protect, managerOnly, addDeposit);
+router.post('/request', protect, requestDeposit);
 router.get('/', protect, getDeposits);
 router.get('/summary', protect, getDepositSummary);
 router.get('/user/:userId', protect, getUserDeposits);
-router.get('/month/:month', protect, adminOnly, getMonthDeposits);
-router.put('/:id', protect, adminOnly, updateDeposit);
-router.delete('/:id', protect, adminOnly, deleteDeposit);
+router.get('/month/:month', protect, getMonthDeposits);
+
+
+router.put('/:id', protect, updateDeposit);
+router.put('/:id/approve', protect, managerOnly, approveDeposit);
+router.delete('/:id', protect, managerOnly, deleteDeposit);
+
+
+
 
 module.exports = router;

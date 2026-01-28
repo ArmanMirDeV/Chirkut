@@ -6,46 +6,56 @@ const { getMonthString } = require('../utils/helpers');
 // @access  Private
 exports.addMeal = async (req, res) => {
   try {
-    const { date, mealType, guestCount = 0 } = req.body;
+    const { date, mealType, guestCount = 0, userId: targetUserId } = req.body;
 
     if (!date || !mealType) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide date and meal type',
-      });
+      return res.status(400).json({ success: false, message: 'Please provide date and meal type' });
     }
 
     const month = getMonthString(date);
 
-    // Check if month is locked
-    const existingMeal = await Meal.findOne({ month, isLocked: true });
-    if (existingMeal) {
-      return res.status(403).json({
-        success: false,
-        message: 'Cannot add meals for a locked month',
-      });
+    // Roles check
+    let targetId = req.user.id;
+    let targetName = req.user.name;
+
+    const isManager = req.user.role === 'manager' || req.user.role === 'admin';
+
+    if (targetUserId && isManager) {
+      const User = require('../models/User');
+      const user = await User.findById(targetUserId);
+      if (!user) return res.status(404).json({ success: false, message: 'Target user not found' });
+      targetId = user._id;
+      targetName = user.name;
+    } else if (targetUserId && !isManager) {
+      return res.status(403).json({ success: false, message: 'Only managers can add meals for other users' });
     }
 
-    // Check if meal already exists for this user, date, and meal type
+    // Check month locked
+    const existingMealLocked = await Meal.findOne({ month, isLocked: true });
+    if (existingMealLocked) {
+      return res.status(403).json({ success: false, message: 'Cannot add meals for a locked month' });
+    }
+
+    // Duplicate check
     const mealExists = await Meal.findOne({
-      userId: req.user.id,
+      userId: targetId,
       date: new Date(date),
       mealType,
     });
 
     if (mealExists) {
-      return res.status(400).json({
-        success: false,
-        message: `You have already added ${mealType} for this date`,
-      });
+      return res.status(400).json({ success: false, message: `${targetName} already has ${mealType} for this date` });
     }
 
+    let mealValue = mealType === 'breakfast' ? 0.5 : 1.0;
+
     const meal = await Meal.create({
-      userId: req.user.id,
-      userName: req.user.name,
-      date,
+      userId: targetId,
+      userName: targetName,
+      date: new Date(date),
       mealType,
-      guestCount,
+      mealValue,
+      guestCount: guestCount || 0,
       month,
       createdBy: req.user.id,
     });
@@ -56,12 +66,73 @@ exports.addMeal = async (req, res) => {
       data: { meal },
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// @desc    Get daily summary for all users
+// @route   GET /api/meals/summary/daily
+// @access  Private
+exports.getDailyMealSummary = async (req, res) => {
+  try {
+    const { date } = req.query;
+    const targetDate = date ? new Date(date) : new Date();
+    
+    const start = new Date(targetDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(targetDate);
+    end.setHours(23, 59, 59, 999);
+
+    const meals = await Meal.find({
+      date: { $gte: start, $lte: end }
+    });
+
+    // Group by user
+    const summaryMap = {};
+    
+    // First, initialize with all active users (or just those who have meals? 
+    // Usually, we want all users to show in a table).
+    // Let's get active users first to ensure everyone is in the tabular format
+    const User = require('../models/User'); // Import here if needed or at top
+    const users = await User.find({ isActive: true }).select('name');
+
+    users.forEach(u => {
+      summaryMap[u._id.toString()] = {
+        userId: u._id,
+        userName: u.name,
+        breakfast: 0,
+        lunch: 0,
+        dinner: 0,
+        total: 0
+      };
+    });
+
+    meals.forEach(m => {
+      const uid = m.userId.toString();
+      if (summaryMap[uid]) {
+        const value = m.mealValue + (m.guestCount * m.mealValue);
+        summaryMap[uid][m.mealType] = value;
+        summaryMap[uid].total += value;
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        date: start.toISOString(),
+        summary: Object.values(summaryMap)
+      }
+    });
+  } catch (error) {
     res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
+
+
 
 // @desc    Get meals
 // @route   GET /api/meals

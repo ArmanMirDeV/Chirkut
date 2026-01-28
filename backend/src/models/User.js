@@ -32,13 +32,20 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['user', 'admin'],
+      enum: ['user', 'manager', 'admin'],
       default: 'user',
+    },
+    managerStatus: {
+
+      type: String,
+      enum: ['none', 'applied', 'approved', 'rejected'],
+      default: 'none',
     },
     isActive: {
       type: Boolean,
       default: true,
     },
+
     joinedDate: {
       type: Date,
       default: Date.now,

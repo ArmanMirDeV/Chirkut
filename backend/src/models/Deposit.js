@@ -43,11 +43,17 @@ const depositSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'approved',
+    },
   },
   {
     timestamps: true,
   }
 );
+
 
 // Index for faster queries
 depositSchema.index({ userId: 1, month: 1 });

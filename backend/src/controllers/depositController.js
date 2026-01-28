@@ -44,6 +44,7 @@ exports.addDeposit = async (req, res) => {
       paymentMethod: paymentMethod || 'cash',
       note: note || '',
       addedBy: req.user.id,
+      status: 'approved', // Admin adds are auto-approved
     });
 
     res.status(201).json({
@@ -58,6 +59,103 @@ exports.addDeposit = async (req, res) => {
     });
   }
 };
+
+// @desc    Request deposit (User)
+// @route   POST /api/deposits/request
+// @access  Private
+exports.requestDeposit = async (req, res) => {
+  try {
+    const { amount, date, paymentMethod, note } = req.body;
+
+    if (!amount || !date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide amount and date',
+      });
+    }
+
+    const month = getMonthString(date);
+
+    // Check if month is locked
+    const lockedDeposit = await Deposit.findOne({ month, isLocked: true });
+    if (lockedDeposit) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot request deposits for a locked month',
+      });
+    }
+
+    const deposit = await Deposit.create({
+      userId: req.user.id,
+      userName: req.user.name,
+      amount,
+      date,
+      month,
+      paymentMethod: paymentMethod || 'cash',
+      note: note || '',
+      addedBy: req.user.id,
+      status: 'pending',
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Deposit request sent to admin',
+      data: { deposit },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Approve/Reject deposit (Admin)
+// @route   PUT /api/deposits/:id/approve
+// @access  Private (Admin only)
+exports.approveDeposit = async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide valid status (approved/rejected)',
+      });
+    }
+
+    const deposit = await Deposit.findById(req.params.id);
+
+    if (!deposit) {
+      return res.status(404).json({
+        success: false,
+        message: 'Deposit not found',
+      });
+    }
+
+    if (deposit.isLocked) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot modify deposit from a locked month',
+      });
+    }
+
+    deposit.status = status;
+    await deposit.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Deposit ${status} successfully`,
+      data: { deposit },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 
 // @desc    Get all deposits
 // @route   GET /api/deposits
@@ -113,8 +211,10 @@ exports.getUserDeposits = async (req, res) => {
 
     const deposits = await Deposit.find(query).sort({ date: -1 });
 
-    // Calculate total
-    const total = deposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+    // Calculate total only for approved deposits
+    const total = deposits
+      .filter(d => d.status === 'approved')
+      .reduce((sum, deposit) => sum + deposit.amount, 0);
 
     res.status(200).json({
       success: true,
@@ -132,29 +232,51 @@ exports.getUserDeposits = async (req, res) => {
 
 // @desc    Get month deposits
 // @route   GET /api/deposits/month/:month
-// @access  Private (Admin only)
+// @access  Private
 exports.getMonthDeposits = async (req, res) => {
   try {
     const { month } = req.params;
 
+    // Fetch all active users first to ensure everyone is listed
+    const activeUsers = await User.find({ isActive: true }).select('name _id');
+    
+    // Fetch all deposits for that month
     const deposits = await Deposit.find({ month }).sort({ date: -1 });
 
-    // Calculate total
-    const total = deposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+    // Calculate total confirmed
+    const total = deposits
+      .filter(d => d.status === 'approved')
+      .reduce((sum, deposit) => sum + deposit.amount, 0);
 
-    // Group by user
+    // Group by user, starting with all active users at 0
     const userDeposits = {};
+    activeUsers.forEach(u => {
+      const id = u._id.toString();
+      userDeposits[id] = {
+        userId: id,
+        userName: u.name,
+        total: 0,
+        deposits: [],
+      };
+    });
+
+    // Add deposit data
     deposits.forEach((deposit) => {
-      if (!userDeposits[deposit.userId]) {
-        userDeposits[deposit.userId] = {
-          userId: deposit.userId,
+      const uId = deposit.userId.toString();
+      // Only include if user exists in our active list (or add them if they are inactive but have deposits)
+      if (!userDeposits[uId]) {
+        userDeposits[uId] = {
+          userId: uId,
           userName: deposit.userName,
           total: 0,
           deposits: [],
         };
       }
-      userDeposits[deposit.userId].total += deposit.amount;
-      userDeposits[deposit.userId].deposits.push(deposit);
+      
+      if (deposit.status === 'approved') {
+        userDeposits[uId].total += deposit.amount;
+      }
+      userDeposits[uId].deposits.push(deposit);
     });
 
     res.status(200).json({
@@ -166,6 +288,7 @@ exports.getMonthDeposits = async (req, res) => {
         userDeposits: Object.values(userDeposits),
       },
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -173,6 +296,7 @@ exports.getMonthDeposits = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Update deposit
 // @route   PUT /api/deposits/:id
@@ -186,6 +310,23 @@ exports.updateDeposit = async (req, res) => {
         success: false,
         message: 'Deposit not found',
       });
+    }
+
+    // Authorization: Admin/Manager can update any. User can only update their own PENDING requests.
+    const isPowerUser = req.user.role === 'admin' || req.user.role === 'manager';
+    if (!isPowerUser) {
+      if (deposit.userId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to update this deposit',
+        });
+      }
+      if (deposit.status !== 'pending') {
+        return res.status(403).json({
+          success: false,
+          message: 'Cannot update an already approved/rejected deposit',
+        });
+      }
     }
 
     // Check if month is locked
@@ -235,6 +376,23 @@ exports.deleteDeposit = async (req, res) => {
       });
     }
 
+    // Authorization: Admin/Manager can delete any. User can only delete their own PENDING requests.
+    const isPowerUser = req.user.role === 'admin' || req.user.role === 'manager';
+    if (!isPowerUser) {
+      if (deposit.userId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this deposit',
+        });
+      }
+      if (deposit.status !== 'pending') {
+        return res.status(403).json({
+          success: false,
+          message: 'Cannot delete an already approved/rejected deposit',
+        });
+      }
+    }
+
     // Check if month is locked
     if (deposit.isLocked) {
       return res.status(403).json({
@@ -266,11 +424,12 @@ exports.getDepositSummary = async (req, res) => {
     const targetMonth = month || getMonthString(new Date());
 
     let userId = req.user.id;
-    if (req.user.role === 'admin' && req.query.userId) {
+    const isPowerUser = req.user.role === 'admin' || req.user.role === 'manager';
+    if (isPowerUser && req.query.userId) {
       userId = req.query.userId;
     }
 
-    const deposits = await Deposit.find({ userId, month: targetMonth });
+    const deposits = await Deposit.find({ userId, month: targetMonth, status: 'approved' });
 
     const total = deposits.reduce((sum, deposit) => sum + deposit.amount, 0);
 

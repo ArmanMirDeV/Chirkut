@@ -60,3 +60,16 @@ exports.adminOnly = (req, res, next) => {
     });
   }
 };
+
+// Manager or Admin middleware
+exports.managerOnly = (req, res, next) => {
+  if (req.user && (req.user.role === 'manager' || req.user.role === 'admin')) {
+    next();
+  } else {
+    res.status(403).json({
+      success: false,
+      message: 'Access denied. Manager only.',
+    });
+  }
+};
+
